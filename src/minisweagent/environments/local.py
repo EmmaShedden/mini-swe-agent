@@ -43,7 +43,13 @@ class LocalEnvironment:
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
         """Execute a command in the local environment and return the result as a dict."""
         command = action.get("command", "")
-        cwd = cwd or self.config.cwd or os.getcwd()
+        try:
+            cwd = cwd or self.config.cwd or os.getcwd()
+        except FileNotFoundError:
+            # Triggers when the agent deleted the directory the process was launched
+            # in (e.g., `rm -rf /app`), and os.getcwd() resolves the deleted inode,
+            # so it keeps failing even if the path is recreated.
+            cwd = "/"
         try:
             with open("/subdir_session_id.txt", "r") as f:
                 s = f.read()
