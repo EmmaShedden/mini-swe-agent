@@ -65,7 +65,7 @@ class LocalEnvironment:
                     ["mkdir", "-p", f"/temp/{subdir}"]
                 )
                 subprocess.run(
-                    ["touch", learn_path, "&&", "touch", dump_path]
+                    ["touch", learn_path, dump_path]
                 )
             except Exception as e:
                 print(f"Error making subdir directory \"{subdir}\" or learn or dump files, exception: {e}")
