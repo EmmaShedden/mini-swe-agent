@@ -109,6 +109,15 @@ environment:
     PIP_PROGRESS_BAR: 'off'
     TQDM_DISABLE: '1'
 model:
+  # For OpenAI, use the Responses API instead of chat_completions. GPT-5.x
+  # reasoning models do NOT reliably honor tool_choice=required with
+  # chat_completions: they intermittently return a plain-text reasoning
+  # "message" (finish_reason=stop) with no tool_call, and three such turns in a
+  # row raise RepeatedFormatError and abort the run. Over the Responses API the
+  # same models return a function_call 10/10. LitellmResponseModel also carries
+  # reasoning items across turns, which chat_completions drops.
+  # Note that this can cause problems on non-openai models (documented in docs/)
+  model_class: litellm_response
   observation_template: |
     {%- if output.output | length < 10000 -%}
     {
