@@ -1,5 +1,6 @@
 import os
 import platform
+import signal
 import subprocess
 from typing import Any
 #from yaya_companion import *
@@ -94,39 +95,28 @@ class LocalEnvironment:
                 #use_command = ["bash", "-c", command]
                 yayaed = True
 
-            result = subprocess.run(
-                use_command,
-                #shell=True,
-                #shell=doshell,
-                shell=False,
-                text=True,
-                cwd=cwd,
-                env=os.environ | self.config.env,
-                timeout=timeout or self.config.timeout,
-                encoding="utf-8",
-                errors="replace",
-                stdout=subprocess.PIPE, #idk why its like this by default, im gonna try messing with this?
-                stderr=subprocess.STDOUT,
-                #stdout=subprocess.STDOUT, #try sending stdout to stdout yknow what im saying
-                #stderr=subprocess.PIPE, #this is jank thrown in rn, we'll see if this raises issues with hte rest of the harbor implementation?
-                #capture_output=True,
-            )
+            # The dump append is in a finally so a command that times out (or
+            # otherwise raises) still gets its strace lines recorded: the next
+            # command truncates learn_path, so skipping the append here would
+            # drop every access the killed command made before the timeout.
+            try:
+                result = _run(use_command, cwd, os.environ | self.config.env, timeout or self.config.timeout)
+            finally:
+                #if yayaed, append strace results to end of dump file
+                if yayaed:
+                    try:
+                        with open(learn_path, "r") as learn_f, open(dump_path, "a") as dump_f:
+                            dump_f.write(f"Bash: {command}\n")
+                            dump_f.write(learn_f.read() + "\n")
+                    except Exception as e:
+                        print(f"Error appending learn results to dump file: {e}")
+                else: # i.e. it was an installer line, just append that line to the file
+                    try:
+                        with open(dump_path, "a") as dump_f:
+                            dump_f.write(f"Bash: {command}\n")
+                    except Exception as e:
+                        print(f"Error appending package bash command to dump file: {e}")
             output = {"output": result.stdout, "returncode": result.returncode, "exception_info": ""}
-
-            #if yayaed, append strace results to end of dump file
-            if yayaed:
-                try:
-                    with open(learn_path, "r") as learn_f, open(dump_path, "a") as dump_f:
-                        dump_f.write(f"Bash: {command}\n")
-                        dump_f.write(learn_f.read() + "\n")
-                except Exception as e:
-                    print(f"Error appending learn results to dump file: {e}")
-            else: # i.e. it was an installer line, just append that line to the file
-                try:
-                    with open(dump_path, "a") as dump_f:
-                        dump_f.write(f"Bash: {command}\n")
-                except Exception as e:
-                    print(f"Error appending package bash command to dump file: {e}")
 
         except Exception as e:
             raw_output = getattr(e, "output", None)
@@ -168,3 +158,33 @@ class LocalEnvironment:
                 }
             }
         }
+
+
+def _run(args: list[str], cwd: str, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+    """Like subprocess.run, but kills the whole process group on timeout so no children are orphaned.
+
+    Ported from upstream mini-swe-agent's local.py, taking an argv list instead of
+    a shell string. This matters more here than upstream: the direct child is
+    strace, so subprocess.run's timeout would kill only strace, leaving bash and
+    its descendants alive -- and holding the stdout pipe open, so communicate()
+    would block until they exited on their own.
+    """
+    process = subprocess.Popen(
+        args,
+        shell=False,
+        text=True,
+        cwd=cwd,
+        env=env,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL) if os.name == "posix" else process.kill()
+        stdout, _ = process.communicate()
+        raise subprocess.TimeoutExpired(args, timeout, output=stdout)
+    return subprocess.CompletedProcess(args, process.returncode, stdout=stdout)
