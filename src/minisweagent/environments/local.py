@@ -14,8 +14,31 @@ from minisweagent.utils.serialize import recursive_merge
 #this function takes a command as a string, as well as a path to pipe the strace output to, and outputs 
 #["strace", strace_args, "--", "bash", "-c", command]
 #hopefully in a format suitable for passing into a subprocess.run call
+SYSCALLS_FILE = "/strace_syscalls.txt"
+
+
+def tracked_syscalls() -> str:
+    """The -e trace= expression, as written into the container by docker_strace.py.
+
+    Deliberately has no default. This module is installed into the container from the
+    bind-mounted fork, so it cannot import trace_generation.strace_syscalls, which is
+    where every syscall name in this project is written -- and a fallback copy here is
+    exactly the second list that kept drifting out of sync with it. Missing file means
+    the environment was not set up by StraceDockerEnvironment, which is worth failing on.
+    """
+    try:
+        with open(SYSCALLS_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"{SYSCALLS_FILE} is missing: it is written by trace_generation/"
+            "docker_strace.py at environment start and holds the syscall set to trace. "
+            "Running this fork outside StraceDockerEnvironment is not supported."
+        ) from e
+
+
 def yaya_command(command: str, strace_output_path: str) -> list[str]:
-    tracked_args = "openat,open,execve,creat,mkdir,rename,unlink,connect,bind,sendto,sendmsg,chdir" # Trace these syscalls
+    tracked_args = tracked_syscalls() # Trace these syscalls
     strace_args  = ["-f", # Follow forks
                     "-s", "256", # Increase max string size for DNS packet capture
                     "-e", tracked_args,
